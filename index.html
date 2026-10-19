@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Zaliczki – pielgrzymka KOREA</title>
+<style>
+  :root {
+    --bg: #f5f3ef; --card: #ffffff; --text: #1f2328; --muted: #656d76;
+    --line: #e3e0da; --accent: #1f4e79; --ok-bg: #e3f2e1; --ok: #1e6b2e;
+    --bad-bg: #fbe4e2; --bad: #a32c22;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181b; --card: #1f2226; --text: #e8e6e3; --muted: #9aa0a6;
+      --line: #33373c; --accent: #8ab4f8; --ok-bg: #1d3323; --ok: #8fd19e;
+      --bad-bg: #3a1f1d; --bad: #f2a29b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 520px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meta div span { display: block; color: var(--muted); font-size: .85rem; }
+  .meta div strong { font-size: 1.15rem; }
+  label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .row { display: flex; gap: 8px; }
+  input {
+    flex: 1; min-width: 0; font: inherit; font-size: 1.1rem; letter-spacing: .05em;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--text);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    font: inherit; font-weight: 600; padding: 10px 18px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) { button { color: #16181b; } }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
+  .msg { margin: 0; }
+  .result { display: none; }
+  .result.show { display: block; }
+  .result.ok { background: var(--ok-bg); border-color: transparent; }
+  .result.bad { background: var(--bad-bg); border-color: transparent; }
+  .status { font-weight: 700; margin: 0 0 12px; }
+  .ok .status { color: var(--ok); }
+  .bad .status { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 8px 0; border-top: 1px solid rgba(127,127,127,.25); }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.sum td { font-weight: 700; }
+  .error { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Zaliczki – pielgrzymka KOREA</h1>
+  <p class="sub">Sprawdź, ile wpłat zostało zaksięgowanych na Twój numer PESEL.</p>
+
+  <section class="card meta" aria-live="polite">
+    <div><span>Stan na</span><strong id="asOf">…</strong></div>
+    <div><span>Wymagana wpłata</span><strong id="required">…</strong></div>
+  </section>
+
+  <section class="card">
+    <form id="form" novalidate>
+      <label for="pesel">Numer PESEL</label>
+      <div class="row">
+        <input id="pesel" type="text" inputmode="numeric" autocomplete="off"
+               maxlength="11" placeholder="11 cyfr" disabled>
+        <button id="btn" type="submit" disabled>Sprawdź</button>
+      </div>
+      <p class="hint" id="hint">Ładowanie danych…</p>
+    </form>
+  </section>
+
+  <section class="card result" id="result" aria-live="polite"></section>
+</main>
+
+<script>
+  // ID udostępnionego arkusza „Udostępnione wpłaty – pielgrzymka KOREA”.
+  // Arkusz musi być udostępniony jako „Każdy, kto ma link – Przeglądający”.
+  const SHEET_ID = "1lGPsvbHMBPFbXtceXnKbWTEunbV6n5jyiuzd6VchrV0";
+  const SHEET_NAME = "Wpłaty";
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => new Intl.NumberFormat("pl-PL").format(n) + " zł";
+  let required = 0;
+  const rows = new Map(); // klucz: PESEL bez 2 pierwszych cyfr
+
+  const cellText = (c) => (c && (c.f ?? c.v) != null ? String(c.f ?? c.v).trim() : "");
+  const cellNum = (c) => {
+    if (!c || c.v == null) return 0;
+    if (typeof c.v === "number") return c.v;
+    const n = Number(String(c.v).replace(/\s/g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  function onData(resp) {
+    try {
+      if (!resp || resp.status === "error") throw new Error("odpowiedź z błędem");
+      const data = resp.table.rows.map((r) => r.c || []);
+      for (const c of data) {
+        const label = cellText(c[0]);
+        if (/^stan na/i.test(label)) $("asOf").textContent = cellText(c[1]) || "—";
+        else if (/^wymagana wp/i.test(label)) {
+          required = cellNum(c[1]);
+          $("required").textContent = fmt(required);
+        } else if (/^\d{9}$/.test(label)) {
+          rows.set(label, { resp: cellNum(c[1]), pesel: cellNum(c[2]), sum: cellNum(c[3]) });
+        }
+      }
+      if (!rows.size) throw new Error("brak wierszy");
+      $("pesel").disabled = false;
+      $("btn").disabled = false;
+      $("hint").textContent = "Wpisz pełny numer PESEL (11 cyfr).";
+      $("pesel").focus();
+    } catch (e) {
+      showLoadError();
+    }
+  }
+
+  function showLoadError() {
+    $("asOf").textContent = "—";
+    $("required").textContent = "—";
+    $("hint").innerHTML = '<span class="error">Nie udało się pobrać danych. Spróbuj ponownie za chwilę.</span>';
+  }
+
+  function load() {
+    const cb = "gvizCb" + Date.now();
+    window[cb] = (resp) => { delete window[cb]; onData(resp); };
+    const s = document.createElement("script");
+    s.src = "https://docs.google.com/spreadsheets/d/" + SHEET_ID +
+      "/gviz/tq?headers=0&range=A1:D300&sheet=" + encodeURIComponent(SHEET_NAME) +
+      "&tqx=out:json;responseHandler:" + cb + "&_=" + Date.now();
+    s.onerror = showLoadError;
+    document.head.appendChild(s);
+  }
+
+  $("pesel").addEventListener("input", (e) => {
+    e.target.value = e.target.value.replace(/\D/g, "").slice(0, 11);
+  });
+
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const box = $("result");
+    const v = $("pesel").value;
+    box.className = "card result show";
+    if (!/^\d{11}$/.test(v)) {
+      box.innerHTML = '<p class="msg error">Numer PESEL musi mieć 11 cyfr.</p>';
+      return;
+    }
+    const r = rows.get(v.slice(2));
+    if (!r) {
+      box.innerHTML = '<p class="msg">Nie znaleziono wpłat dla tego numeru PESEL. ' +
+        'Sprawdź, czy numer jest poprawny, albo skontaktuj się z organizatorem.</p>';
+      return;
+    }
+    const ok = r.sum >= required;
+    box.className = "card result show " + (ok ? "ok" : "bad");
+    box.innerHTML =
+      '<p class="status">' + (ok ? "Wymagana kwota wpłacona" :
+        "Brakuje " + fmt(required - r.sum)) + "</p>" +
+      "<table>" +
+      "<tr><td>Wpłacono przez odpowiedzialnego</td><td>" + fmt(r.resp) + "</td></tr>" +
+      "<tr><td>Wpłacono po PESEL</td><td>" + fmt(r.pesel) + "</td></tr>" +
+      '<tr class="sum"><td>Suma</td><td>' + fmt(r.sum) + "</td></tr>" +
+      "</table>";
+  });
+
+  load();
+</script>
+</body>
+</html>
