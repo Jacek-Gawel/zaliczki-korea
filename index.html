@@ -86,6 +86,19 @@
   </section>
 
   <section class="card result" id="result" aria-live="polite"></section>
+
+  <section class="card">
+    <form id="editForm" novalidate>
+      <label for="editPesel">Wysłanie linku do edycji formularza</label>
+      <div class="row">
+        <input id="editPesel" type="text" inputmode="numeric" autocomplete="off"
+               maxlength="11" placeholder="PESEL (11 cyfr)">
+        <button id="editBtn" type="submit">Wyślij</button>
+      </div>
+      <p class="hint">Link do edycji Twoich odpowiedzi zostanie wysłany na adres e-mail podany w formularzu.</p>
+    </form>
+    <p class="msg" id="editMsg" aria-live="polite" style="margin-top:12px"></p>
+  </section>
 </main>
 
 <script>
@@ -177,6 +190,61 @@
       "<tr><td>Wpłacono po PESEL</td><td>" + fmt(r.pesel) + "</td></tr>" +
       '<tr class="sum"><td>Suma</td><td>' + fmt(r.sum) + "</td></tr>" +
       "</table>";
+  });
+
+  // Adres wdrożenia skryptu z apps-script/Code.gs (patrz apps-script/README.md).
+  const LINK_API_URL = "";
+
+  $("editPesel").addEventListener("input", (e) => {
+    e.target.value = e.target.value.replace(/\D/g, "").slice(0, 11);
+  });
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  $("editForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = $("editMsg");
+    const btn = $("editBtn");
+    const v = $("editPesel").value;
+    msg.className = "msg";
+    if (!/^\d{11}$/.test(v)) {
+      msg.className = "msg error";
+      msg.textContent = "Numer PESEL musi mieć 11 cyfr.";
+      return;
+    }
+    if (!LINK_API_URL) {
+      msg.className = "msg error";
+      msg.textContent = "Wysyłka linku nie jest jeszcze skonfigurowana.";
+      return;
+    }
+    btn.disabled = true;
+    msg.textContent = "Wysyłanie…";
+    try {
+      const res = await fetch(LINK_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ pesel: v }),
+      });
+      const d = await res.json();
+      if (d.ok) {
+        msg.innerHTML = "Link do edycji formularza został wysłany na adres e-mail: <strong>" +
+          esc(d.email) + "</strong>.";
+      } else if (d.error === "throttled") {
+        msg.className = "msg error";
+        msg.textContent = "Link został już niedawno wysłany. Sprawdź skrzynkę (także spam) i spróbuj ponownie za kilka minut.";
+      } else if (d.error === "not_found" || d.error === "no_email" || d.error === "no_link") {
+        msg.className = "msg error";
+        msg.textContent = "Nie znaleziono zgłoszenia dla tego numeru PESEL. Skontaktuj się z organizatorem.";
+      } else {
+        throw new Error(d.error || "błąd");
+      }
+    } catch (err) {
+      msg.className = "msg error";
+      msg.textContent = "Nie udało się wysłać linku. Spróbuj ponownie za chwilę.";
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   load();
